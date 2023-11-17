@@ -1,0 +1,148 @@
+---
+title: "SMS"
+author: "Chuhan Yue"
+date: "2023-11-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(quanteda)
+library(textstem)
+library("quanteda.textplots")
+library("quanteda.textstats")
+library(plotly)
+library(sentimentr)
+library(hunspell)
+library(e1071)
+```
+
+```{r}
+text <- readLines("SMSSpamCollection.txt")
+text<-as.data.frame(text)
+split_label<-function(x){
+  Label = substr(x, 1, 4)%>%trimws()
+}
+split_text<-function(x){
+  Text = substr(x, 5, nchar(x))%>%tolower()%>%lemmatize_words()
+}
+text_1<-lapply(text,split_label)%>%as.data.frame() 
+text_2<-lapply(text,split_text)%>%as.data.frame() 
+textdata<-cbind(text_1,text_2)
+colnames(textdata)<-c("category","text")
+head(textdata)
+```
+
+```{r}
+textdata$text<- as.character(textdata$text)
+textdata$word_check <- hunspell(textdata$text)
+```
+
+somethinfg wrong here.
+```{r}
+cleantext = function(x){
+  x<-sapply(1:length(x),function(y){
+    bad = hunspell(x[y])[[1]]
+    good = unlist(lapply(hunspell_suggest(bad),`[[`,1))
+
+    if (length(bad)){
+      for (i in 1:length(bad)){
+        x[y] <<- gsub(bad[i],good[i],x[y])
+      }}})
+  return(x)
+}
+textdata$text<-cleantext(textdata$text)
+```
+
+
+```{r}
+docs_1 <- corpus(textdata[,2])
+docs_2 <- quanteda::tokens(docs_1,remove_punct = TRUE, remove_numbers = TRUE)
+sw <- stopwords("english") 
+docs_3 <-tokens_remove(docs_2, sw)%>%dfm()
+```
+
+```{r}
+toks_2 <- dfm_trim(docs_3,min_termfreq=2,max_termfreq = 600, min_docfreq = 2)
+topfeatures(toks_2, 20)
+```
+
+```{r}
+set.seed(100)
+textplot_wordcloud(toks_2, min_size = 0.000001,
+                   color = RColorBrewer::brewer.pal(8, "Dark2"))
+```
+
+```{R}
+tstat_freq_inaug <- textstat_frequency(toks_2, n = 100)
+sorted_moby_freqs_t <- topfeatures(toks_2, n = nfeat(toks_2))
+ggplot(tstat_freq_inaug, aes(x = frequency, y = reorder(feature, frequency))) +
+    geom_point() + 
+    labs(x = "Frequency", y = "Feature")
+```
+
+```{r}
+sorted_moby_freqs_t <- topfeatures(toks_2, n = nfeat(toks_2))
+sorted_moby_rel_freqs_t <- sorted_moby_freqs_t  / sum(sorted_moby_freqs_t ) * 100
+plot(sorted_moby_rel_freqs_t[1:10], type = "b",
+     xlab = "Top Ten Words", ylab = "Percentage of Full Text", xaxt = "n")
+axis(1,1:10, labels = names(sorted_moby_rel_freqs_t[1:10]))
+```
+
+seperate dataset to train data and test data
+```{r}
+labels <- textdata$category
+# 划分数据
+set.seed(123)
+train_idx <- sample(1:nrow(docs_3), 0.8 * nrow(docs_3))
+train_data <- docs_3[train_idx, ]%>%convert(., to = "data.frame")
+test_data <- docs_3[-train_idx, ]%>%convert(., to = "data.frame")
+
+```
+
+naiveBayes
+```{r}
+model <-  naiveBayes(train_data, labels[train_idx])
+predictions <- predict(model, test_data)
+conf_matrix <- table(predictions, labels[-train_idx])
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+print(paste("Accuracy:", accuracy))
+```
+
+neutrl network
+```{R}
+library(keras)
+
+# 创建神经网络模型
+model <- keras_model_sequential() %>%
+  layer_embedding(input_dim = dim(docs_3)[2], output_dim = 50, input_length = dim(docs_3)[1]) %>%
+  layer_flatten() %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+# 编译模型
+model %>% compile(
+  optimizer = "adam",
+  loss = "binary_crossentropy",
+  metrics = "accuracy"
+)
+```
+```{r}
+train_data_matrix <- as.matrix(train_data)
+test_data_matrix <- as.matrix(test_data)
+
+# 训练模型
+model %>% fit(
+  x = train_data_matrix,
+  y = train_labels,
+  epochs = 10,
+  batch_size = 32,
+  validation_split = 0.2
+)
+```
+
+```{r}
+sentiment_scores <- sentiment_by(as.character(textdata[,2]), by = NULL)
+sentiment_scores
+```
